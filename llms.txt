@@ -1,0 +1,12 @@
+# nano-finality-proof
+
+> A small HTTP service that measures how long Nano (XNO) payments take to confirm, by sending itself 1 raw on a fixed interval and timing it, then publishes the percentiles together with the sample count, failures, raw rows and the exact method - so an agent can decide when a received XNO payment is safe to treat as final.
+
+- Endpoints: GET /v1/finality, /v1/finality/samples, /v1/finality/method, /v1/finality/compare, /v1/health.
+- Every figure is measured; failures stay in the denominator; no percentile is served without its n.
+- Python 3.9+, standard library only. 54 unit tests and a 67-check end-to-end run use a fake node, no network.
+- Limits: needs your own Nano node with a wallet and a funded account (each sample is a real 1-raw send); measures that node's view; no public instance or published figures yet.
+
+## Links
+- Source: https://github.com/dhyabi2/nano-finality-proof
+- README: https://github.com/dhyabi2/nano-finality-proof/blob/main/README.md

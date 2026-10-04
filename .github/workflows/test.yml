@@ -1,0 +1,98 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every version the README's "Python 3.9+" admits. 3.9 is present in
+        # actions/python-versions for ubuntu-24.04 (3.9.22 and later), read off
+        # the manifest rather than assumed, so no leg needs an older runner.
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: say which interpreter this is
+        run: python3 -VV
+      - name: the unit tests
+        # The package is standard library only, so there is nothing to install.
+        run: python3 -m unittest discover -s tests -t tests
+      - name: the end-to-end checks, over a real loopback socket
+        run: python3 e2e_check.py
+
+  advertised-counts:
+    name: the README's counts are measured, not asserted
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: measure both runners, then compare with what the README advertises
+        run: |
+          # GitHub's default shell is `bash -e`, NOT `-o pipefail`, and these
+          # runners are read through redirection for that reason: a count parsed
+          # out of a pipeline whose left-hand side died would read as a pass.
+          set -euo pipefail
+          # Outside the checkout, so a measurement artefact can never be
+          # mistaken for a tracked file or dirty the tree a later step reads.
+          out="$(mktemp -d)"
+          python3 -m unittest discover -s tests -t tests > "$out/unit.out" 2> "$out/unit.err"
+          python3 e2e_check.py > "$out/e2e.out"
+          MEASURED_DIR="$out" python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+          import sys
+
+          measured_dir = pathlib.Path(os.environ["MEASURED_DIR"])
+          unit = (measured_dir / "unit.err").read_text()
+          e2e = (measured_dir / "e2e.out").read_text()
+          readme = pathlib.Path("README.md").read_text()
+
+
+          def one(pattern, text, what, flags=0):
+              found = re.search(pattern, text, flags)
+              if not found:
+                  sys.exit("could not read %s; the output's shape changed" % what)
+              return int(found.group(1))
+
+
+          measured = {
+              "unittest suite": one(r"^Ran (\d+) tests?\b", unit,
+                                    "the unit-test count out of unittest's own summary",
+                                    re.M),
+              "e2e_check.py": one(r"^ALL (\d+) END-TO-END CHECKS PASSED$", e2e,
+                                  "the end-to-end count out of e2e_check.py's own summary",
+                                  re.M),
+          }
+          advertised = {
+              "unittest suite": one(r"unittest discover[^\n]*#\s*(\d+) tests", readme,
+                                    "the unit-test count the README advertises"),
+              "e2e_check.py": one(r"e2e_check\.py[^\n]*#\s*(\d+) checks", readme,
+                                  "the end-to-end count the README advertises"),
+          }
+
+          stale = []
+          for runner in sorted(measured):
+              got, said = measured[runner], advertised[runner]
+              print("%-16s measured %-4d README says %-4d %s"
+                    % (runner, got, said, "ok" if got == said else "STALE"))
+              if got != said:
+                  stale.append("%s: README says %d, measured %d" % (runner, said, got))
+
+          if stale:
+              sys.exit("the README advertises a count nothing measured:\n  "
+                       + "\n  ".join(stale))
+          print("every count the README advertises was measured on this runner")
+          PY

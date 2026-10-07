@@ -4,7 +4,7 @@
 
 - Endpoints: GET /v1/finality, /v1/finality/samples, /v1/finality/method, /v1/finality/compare, /v1/health.
 - Every figure is measured; failures stay in the denominator; no percentile is served without its n.
-- Python 3.9+, standard library only. 54 unit tests and a 67-check end-to-end run use a fake node, no network.
+- Python 3.9+, standard library only. 59 unit tests and a 67-check end-to-end run use a fake node, no network.
 - Limits: needs your own Nano node with a wallet and a funded account (each sample is a real 1-raw send); measures that node's view; no public instance or published figures yet.
 
 ## Links

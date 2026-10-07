@@ -47,7 +47,7 @@ Python 3.9+. No dependencies — standard library only.
 
 ```bash
 git clone https://github.com/dhyabi2/nano-finality-proof && cd nano-finality-proof
-python3 -m unittest discover -s tests -t tests   # 54 tests
+python3 -m unittest discover -s tests -t tests   # 59 tests
 python3 e2e_check.py                             # 67 checks over a real socket
 ```
 

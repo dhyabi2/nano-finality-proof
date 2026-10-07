@@ -142,9 +142,39 @@ class FakeNode(NanoNode):
 
 
 def _hostname(url: str) -> str:
+    """The node's host, and never anything that could be a credential.
+
+    `self.name` is a label, and it is a PUBLISHED one: it is served as `node`
+    on `/v1/finality`, on `/v1/finality/method`, on `/v1/finality/compare` and
+    in every row of `/v1/finality/samples`, all of which are open GETs.
+
+    `urlparse(...).hostname` strips a `user:pass@` prefix, but it returns None
+    for a URL with no scheme - `urlparse("user:key@node.example:7076").hostname`
+    is None, because everything lands in `path` - and the fallback was the URL
+    itself. Hosted Nano nodes are routinely handed out as
+    `https://user:key@node.example`, so an operator who set NANO_NODE_URL
+    without the scheme published their node credential on an open endpoint.
+    (The RPC itself cannot work without a scheme, so every sample is an error
+    row - and an error row carries `node` too.)
+
+    So the authority is taken by hand when urlparse cannot: everything after
+    the last `@` and before the first `/`, `?` or `#`, with a numeric port
+    removed. A credential can only appear before an `@`, and nothing here can
+    return a string that still has one.
+    """
     from urllib.parse import urlparse
 
-    return urlparse(url).hostname or url
+    hostname = urlparse(url).hostname
+    if hostname:
+        return hostname
+    authority = url.split("://", 1)[-1]
+    for cut in ("/", "?", "#"):
+        authority = authority.split(cut, 1)[0]
+    authority = authority.rsplit("@", 1)[-1]
+    head, sep, tail = authority.rpartition(":")
+    if sep and tail.isdigit() and "]" not in authority:   # a port, not IPv6
+        authority = head
+    return authority or "the configured node"
 
 
 def _is_block_hash(value) -> bool:

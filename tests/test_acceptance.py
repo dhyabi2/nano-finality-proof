@@ -15,7 +15,7 @@ from helpers import BASE_URL, build, take
 
 from nano_finality import errors, samples, stats
 from nano_finality.clock import FakeClock
-from nano_finality.node import FakeNode, NodeError
+from nano_finality.node import FakeNode, NodeError, RpcNode
 from nano_finality.sampler import Sampler
 from nano_finality.samples import SampleStore
 from nano_finality.service import Service
@@ -604,6 +604,70 @@ class TestNoNetworkInTheTests(unittest.TestCase):
                     importers.append(name)
         self.assertEqual(sorted(set(importers)), ["node.py"])
 
+
+class TestPublishedNodeNameCarriesNoCredential(unittest.TestCase):
+    """`node` is served on open endpoints, so it must never be a secret.
+
+    Hosted Nano nodes are handed out as `https://user:key@node.example`. The
+    name was `urlparse(url).hostname or url`, and `hostname` is None for a URL
+    with no scheme - so a schemeless node URL published the credential as
+    `node` on /v1/finality, on /v1/finality/method and in every sample row.
+    """
+
+    SECRET = "SUPERSECRETKEY"
+
+    def test_a_schemeless_url_with_basic_auth_publishes_only_the_host(self):
+        node = RpcNode("user:%s@node.example:7076" % self.SECRET, "wallet-id")
+        self.assertEqual(node.name, "node.example")
+
+    def test_no_shape_of_node_url_can_put_a_credential_in_the_name(self):
+        for url in (
+            "https://user:%s@node.example:7076" % self.SECRET,
+            "user:%s@node.example:7076" % self.SECRET,
+            "user:%s@node.example" % self.SECRET,
+            "//user:%s@node.example" % self.SECRET,
+            "node.example:7076/rpc?token=%s" % self.SECRET,
+            "https://node.example/rpc?token=%s" % self.SECRET,
+            "node.example?token=%s" % self.SECRET,
+            "user:%s@node.example/rpc#%s" % (self.SECRET, self.SECRET),
+        ):
+            with self.subTest(url=url):
+                name = RpcNode(url, "wallet-id").name
+                self.assertNotIn(self.SECRET, name)
+                self.assertNotIn("@", name)
+                self.assertEqual(name, "node.example")
+
+    def test_the_credential_reaches_no_published_surface(self):
+        """The whole way out: the name is what /v1/finality and the rows serve."""
+        clock = FakeClock()
+        store = SampleStore(clock)
+        node = RpcNode("user:%s@node.example:7076" % self.SECRET, "wallet-id")
+        sampler = Sampler(node, store, clock, "nano_1src", "nano_1dst")
+        service = Service(sampler, store, clock, base_url="http://localhost:8080")
+
+        # No socket: the send fails the way a schemeless URL really fails, and
+        # an error row is recorded - which carries `node` just as a confirmed
+        # one does.
+        def refuse(req, timeout=None):
+            raise ValueError("unknown url type")
+        node._opener = refuse
+        sampler.run_once()
+
+        published = json.dumps([
+            service.finality(), service.method_json(), service.method_text(),
+            service.samples_page(limit=10), service.health(),
+        ])
+        self.assertNotIn(self.SECRET, published)
+        self.assertEqual(json.loads(json.dumps(service.finality()))["node"],
+                         "node.example")
+
+    def test_an_unreadable_url_names_no_host_rather_than_echoing_it(self):
+        self.assertEqual(RpcNode("", "wallet-id").name, "the configured node")
+
+    def test_a_plain_host_and_an_ipv6_literal_still_read_as_themselves(self):
+        self.assertEqual(RpcNode("node.example", "w").name, "node.example")
+        self.assertEqual(RpcNode("http://[::1]:7076", "w").name, "::1")
+        self.assertEqual(RpcNode("[::1]:7076", "w").name, "[::1]:7076")
 
 if __name__ == "__main__":
     unittest.main()

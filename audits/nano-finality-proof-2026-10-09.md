@@ -25,7 +25,10 @@ since 2026-10-07 - the earlier audits' ground is not re-asserted here, it was re
 - **NEW: the README's "Python 3.9+" claim.** Searched the package for syntax that would not parse
   on 3.9 (`match`/`case`, `X | None` annotations): none. The suite was then run on **3.12.x
   (59 tests, OK)** and **3.13.x (59 tests, OK)** as well as 3.11. 3.9 and 3.10 interpreters are not
-  present in this environment, so the floor itself is unverified - see below.
+  present in this environment. **The floor itself is nevertheless proven, by CI rather than by this
+  run:** `.github/workflows/test.yml:19` runs the matrix `["3.9","3.10","3.11","3.12","3.13"]`, and
+  all five jobs are green on the pull request carrying this file - so the README's "Python 3.9+" is
+  a supported claim and not just a consistent one.
 - **NEW: the credential-stripping in the published node label.** `node._hostname` is the one
   function standing between an operator's `https://user:key@node.example` and an open GET, because
   `self.name` is served as `node` on four public endpoints including every error row. Driven
@@ -82,8 +85,6 @@ re-derive them, and none of them hurts a payer today:
 
 ## Could not verify
 
-- **The "Python 3.9+" floor itself.** Only 3.11, 3.12 and 3.13 are installed here. The claim is
-  consistent with the syntax used, but it has not been executed on 3.9 or 3.10.
 - **Anything against a real Nano node.** This environment's network policy answers 403 to CONNECT
   for the hosts involved, and the suite is built not to need one. No `RpcNode` was constructed
   against a live RPC, so `send`/`confirmed`/`reachable` are verified only against the

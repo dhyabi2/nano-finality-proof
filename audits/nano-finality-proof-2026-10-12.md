@@ -88,6 +88,12 @@ $ python3 -m unittest discover -s tests     # Ran 63 tests — OK
 $ python3 e2e_check.py                      # ALL 67 END-TO-END CHECKS PASSED
 ```
 
+The first push of this branch left the README advertising the old count, and
+the repository's own `advertised-counts` job caught it — "unittest suite
+measured 63 README says 59 STALE" — while all five Python versions passed.
+Corrected here. Worth recording that the guard earned its keep against the
+run that added the tests, which is exactly the case it exists for.
+
 ## Also checked, found clean
 
 - **`stats.percentile` and `_round_half_up`.** The rank `h` is a `Fraction`, so

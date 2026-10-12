@@ -652,6 +652,23 @@ class TestAReplyThatIsNotAnObject(unittest.TestCase):
             self._node_answering({"error": "Bad wallet number"}).send(
                 "nano_a", "nano_b", 1)
 
+    def test_health_reads_such_a_node_as_unreachable(self):
+        """Deliberate: `reachable()` used to say True for any 200 with JSON.
+
+        A `version` call answered with `[]`, `null`, a string or a number now
+        raises `NodeError`, so `reachable()` is False and `/v1/health` reports
+        the node unreachable. An object reply still reads as reachable.
+        """
+        for body in self.UNUSABLE:
+            with self.subTest(body=body):
+                node = self._node_answering(body)
+                self.assertFalse(node.reachable())
+                service, sampler, _node, _store, _clock = build(latency_ms=400)
+                sampler.node = node
+                self.assertEqual(service.health()["node"], "unreachable")
+        self.assertTrue(
+            self._node_answering({"node_vendor": "Nano V27.1"}).reachable())
+
 
 class TestNoNetworkInTheTests(unittest.TestCase):
     def test_only_node_py_can_dial_out(self):

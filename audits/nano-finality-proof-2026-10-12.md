@@ -43,9 +43,10 @@ None           send         -> !! AttributeError: 'NoneType' object has no attri
 A real Nano node answers objects. A gateway, reverse proxy or rate limiter in
 front of one does not always: a 200 carrying `[]` or a bare string is an
 ordinary shape for a hosted RPC endpoint under load, and the module's own
-contract is that it never lets one through — "every failure is a `NodeError`"
-(`node.py:9`), because `NodeError` is the one exception `Sampler.run_once`
-catches and turns into a row.
+contract is that it never lets one through — `NodeError` is documented as
+"The node refused, was unreachable, or answered something unusable."
+(`node.py:20`), and it is the one exception `Sampler.run_once` catches and
+turns into a row.
 
 **`AttributeError` is not a `NodeError`, so the sample was not recorded at
 all:**
@@ -59,13 +60,13 @@ ever_sampled  : False
 ```
 
 That breaks the invariant `run_once` states in its own docstring ("Always
-records a row -- confirmed, timeout or error", `sampler.py:42`), and
+records a row -- confirmed, timeout or error", `sampler.py:44`), and
 `run_forever`'s `except Exception: pass` then swallows it silently. The
 consequence is the one this package exists not to have: **a dropped sample
 never reaches the denominator.** A node answering unusable rubbish read as a
 quieter service rather than a failing one, where the same node answering
 `{"error": ...}` would have been an error row and pulled the rate down —
-`sampler.py:85` says it plainly for the timeout case, "a cutoff that quietly
+`sampler.py:87-90` says it plainly for the timeout case, "a cutoff that quietly
 waits a bit longer for a slow sample is how a confirmation rate becomes 100%".
 
 Fixed by refusing a non-object reply in `_rpc`, which is the one place that
@@ -74,24 +75,31 @@ reads the wire. It **only adds a refusal**: a reply that used to raise
 and an object reply — with or without `error` — takes exactly the path it took
 before. No amount, destination, rounding or key path is touched.
 
-Four tests added. **Three fail with `node.py` alone reverted to `main`** (13
-subtest errors): `send`/`confirmed` raise `AttributeError` instead of
-`NodeError`, `run_once` loses the sample instead of recording an error row,
-and the served `confirmation_rate` holds at `1.00000` over three samples
-instead of falling to `0.75000` over four. The fourth is the control that must
+One visible consequence beyond the sampler: `/v1/health` reads the node
+through `reachable()` (`node.py:101-106`, called from `service.py:165`), so a
+node whose `version` call answers 200 with a non-object — `[]`, `null`, a
+string — used to be reported `"reachable"` and is now reported
+`"unreachable"`; `test_health_reads_such_a_node_as_unreachable` pins it.
+
+Five tests added. **Four fail with `node.py` alone reverted to `main`** (13
+subtest errors, 4 subtest failures): `send`/`confirmed` raise `AttributeError`
+instead of `NodeError`, `run_once` loses the sample instead of recording an
+error row, the served `confirmation_rate` holds at `1.00000` over three samples
+instead of falling to `0.75000` over four, and `reachable()` reads a
+non-object reply as reachable. The fifth is the control that must
 hold either way — a normal `{"block": ...}` reply still sends, a
 `{"confirmed": "true"}` reply still reads confirmed, and an `{"error": ...}`
 reply still refuses.
 
 ```
-$ python3 -m unittest discover -s tests     # Ran 63 tests — OK
+$ python3 -m unittest discover -s tests     # Ran 64 tests — OK
 $ python3 e2e_check.py                      # ALL 67 END-TO-END CHECKS PASSED
 ```
 
 The first push of this branch left the README advertising the old count, and
 the repository's own `advertised-counts` job caught it — "unittest suite
 measured 63 README says 59 STALE" — while all five Python versions passed.
-Corrected here. Worth recording that the guard earned its keep against the
+Corrected here, and moved to 64 when the health test was added. Worth recording that the guard earned its keep against the
 run that added the tests, which is exactly the case it exists for.
 
 ## Also checked, found clean
@@ -110,7 +118,7 @@ run that added the tests, which is exactly the case it exists for.
   `node.send` and nowhere else in the package, and `elapsed_ms` is
   `now_ms - t0_ms` where `now_ms` is read *before* the `is_confirmed` branch,
   so a slow poll cannot be charged to the network or vice versa. A timeout
-  stays in the denominator (`sampler.py:85`) and `prune` never looks at
+  stays in the denominator (`sampler.py:86-93`) and `prune` never looks at
   `outcome`.
 - **`Service.compare`'s `not self.compare_store` guard.** `SampleStore`
   defines neither `__len__` nor `__bool__`, so a configured-but-empty second

@@ -64,7 +64,19 @@ class RpcNode(NanoNode):
                 answer = json.loads(resp.read().decode("utf-8"))
         except Exception as exc:                     # noqa: BLE001 - any failure is a node failure
             raise NodeError(f"{type(exc).__name__}: {exc}") from None
-        if isinstance(answer, dict) and answer.get("error"):
+        if not isinstance(answer, dict):
+            # Valid JSON that is not an object. A node answers objects, but a
+            # gateway, proxy or rate limiter in front of one can answer 200
+            # with `[]`, `null` or a bare string, and `send`/`confirmed` then
+            # called `.get` on it and raised AttributeError - not a NodeError.
+            # `Sampler.run_once` catches only NodeError, so it raised instead
+            # of recording a row, and `run_forever`'s `except Exception: pass`
+            # swallowed it: the sample was dropped and never reached the
+            # denominator, which is how a failing node reads as a quieter one.
+            raise NodeError(
+                "the node answered JSON that is not an object: %s"
+                % repr(answer)[:80])
+        if answer.get("error"):
             raise NodeError(str(answer["error"]))
         return answer
 

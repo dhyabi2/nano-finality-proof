@@ -7,6 +7,7 @@ retention window both resolve in microseconds.
 """
 
 import ast
+import io
 import json
 import os
 import unittest
@@ -574,6 +575,99 @@ class TestTimingDefinition(unittest.TestCase):
         self.assertEqual(store.last().outcome, "error")
         self.assertIsNone(store.last().elapsed_ms)
         self.assertIsNotNone(store.last().block_hash)
+
+
+class TestAReplyThatIsNotAnObject(unittest.TestCase):
+    """A node reply that is valid JSON but not an object is a node failure.
+
+    Every failure in `node.py` is a `NodeError`, because `NodeError` is the
+    one thing `Sampler.run_once` catches and turns into a row. A reply of
+    `[]`, `null`, a string or a number used to reach `answer.get(...)` and
+    raise `AttributeError` instead, which `run_once` does not catch: it raised
+    rather than recording a row, and `run_forever` swallowed it. The dropped
+    sample never reached the denominator, so a node answering unusable
+    rubbish read as a quieter service than one answering errors.
+    """
+
+    UNUSABLE = ([], None, "rate limited", 7)
+
+    @staticmethod
+    def _node_answering(body):
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def opener(req, timeout=None):
+            return Resp(json.dumps(body).encode("utf-8"))
+
+        return RpcNode("https://rpc.example.org", "WALLET", opener=opener)
+
+    def test_send_and_confirmed_raise_node_error_not_attribute_error(self):
+        for body in self.UNUSABLE:
+            node = self._node_answering(body)
+            with self.subTest(body=body, call="send"):
+                with self.assertRaises(NodeError):
+                    node.send("nano_a", "nano_b", 1)
+            with self.subTest(body=body, call="confirmed"):
+                with self.assertRaises(NodeError):
+                    node.confirmed("A" * 64)
+
+    def test_the_sample_is_an_error_row_and_not_a_lost_sample(self):
+        for body in self.UNUSABLE:
+            with self.subTest(body=body):
+                clock = FakeClock()
+                store = SampleStore(clock)
+                sampler = Sampler(self._node_answering(body), store, clock,
+                                  "nano_a", "nano_b")
+                sampler.run_once()
+                self.assertEqual(len(store.all_rows()), 1)
+                self.assertEqual(store.last().outcome, "error")
+                self.assertTrue(store.ever_sampled)
+
+    def test_such_a_sample_stays_in_the_denominator(self):
+        """The rate must fall, not hold, when the node answers rubbish."""
+        clock = FakeClock()
+        service, sampler, _node, store, _clock = build(latency_ms=400,
+                                                       clock=clock)
+        take(sampler, 3)
+        self.assertEqual(service.finality("1h")["confirmation_rate"], "1.00000")
+
+        sampler.node = self._node_answering([])
+        sampler.run_once()
+        body = service.finality("1h")
+        self.assertEqual(body["samples"], 4)
+        self.assertEqual(body["errors"], 1)
+        self.assertEqual(body["confirmation_rate"], "0.75000")
+
+    def test_an_object_reply_still_works_and_an_error_object_still_refuses(self):
+        """The control: nothing about a normal reply changes."""
+        ok = self._node_answering({"block": "b" * 64})
+        self.assertEqual(ok.send("nano_a", "nano_b", 1), "B" * 64)
+        self.assertTrue(
+            self._node_answering({"confirmed": "true"}).confirmed("A" * 64))
+        with self.assertRaises(NodeError):
+            self._node_answering({"error": "Bad wallet number"}).send(
+                "nano_a", "nano_b", 1)
+
+    def test_health_reads_such_a_node_as_unreachable(self):
+        """Deliberate: `reachable()` used to say True for any 200 with JSON.
+
+        A `version` call answered with `[]`, `null`, a string or a number now
+        raises `NodeError`, so `reachable()` is False and `/v1/health` reports
+        the node unreachable. An object reply still reads as reachable.
+        """
+        for body in self.UNUSABLE:
+            with self.subTest(body=body):
+                node = self._node_answering(body)
+                self.assertFalse(node.reachable())
+                service, sampler, _node, _store, _clock = build(latency_ms=400)
+                sampler.node = node
+                self.assertEqual(service.health()["node"], "unreachable")
+        self.assertTrue(
+            self._node_answering({"node_vendor": "Nano V27.1"}).reachable())
 
 
 class TestNoNetworkInTheTests(unittest.TestCase):

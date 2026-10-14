@@ -96,8 +96,13 @@ def serve(service, host="127.0.0.1", port=8080):
     return ThreadingHTTPServer((host, port), make_handler(service))
 
 
-def build_from_env():                          # pragma: no cover - entry point
-    """Wire a real service from the environment. Nothing is read from a file."""
+def build_from_env():
+    """Wire a real service from the environment. Nothing is read from a file.
+
+    No longer `# pragma: no cover`: `TestBothStoresShareOneRetentionWindow`
+    drives it. It constructs `RpcNode` but never calls it, which opens no
+    socket - the same thing the credential tests do.
+    """
     from .clock import Clock
     from .node import RpcNode
     from .sampler import from_env
@@ -111,11 +116,23 @@ def build_from_env():                          # pragma: no cover - entry point
             "This service measures a real node or it measures nothing."
         )
     clock = Clock()
+    # One retention window for both stores. `/v1/finality/compare` serves the
+    # same window computed over each store, under a note that says "The same
+    # measurement, run against two independently operated nodes", and
+    # `/v1/finality/method` publishes ONE `retention_days`, read off the primary
+    # store. The compare store used to take the 30-day default whatever
+    # FINALITY_RETENTION_S said, so an operator who shortened retention got two
+    # columns covering different spans of history - the second node answering
+    # over up to 30 days of samples against the first node's 7 - while the
+    # published method said 7 for both. Every other knob the second sampler
+    # takes (interval, timeout, amount, accounts) already comes from the same
+    # environment through `from_env`; this one was the exception.
+    retention_s = int(os.environ.get("FINALITY_RETENTION_S",
+                                     samples.RETENTION_S))
     store = samples.SampleStore(
         clock,
         path=os.environ.get("FINALITY_STORE_PATH"),
-        retention_s=int(os.environ.get(
-            "FINALITY_RETENTION_S", samples.RETENTION_S)),
+        retention_s=retention_s,
     )
     sampler = from_env(RpcNode(node_url, wallet), store, clock)
 
@@ -123,7 +140,8 @@ def build_from_env():                          # pragma: no cover - entry point
     compare_url = os.environ.get("FINALITY_COMPARE_NODE_URL")
     if compare_url:
         compare_store = samples.SampleStore(
-            clock, path=os.environ.get("FINALITY_COMPARE_STORE_PATH"))
+            clock, path=os.environ.get("FINALITY_COMPARE_STORE_PATH"),
+            retention_s=retention_s)
         compare_sampler = from_env(RpcNode(compare_url, wallet),
                                    compare_store, clock)
     base = os.environ.get("FINALITY_PUBLIC_BASE_URL", "http://localhost:8080")

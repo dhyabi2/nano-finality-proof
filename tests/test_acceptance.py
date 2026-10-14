@@ -11,10 +11,11 @@ import io
 import json
 import os
 import unittest
+import unittest.mock
 
 from helpers import BASE_URL, build, take
 
-from nano_finality import errors, samples, stats
+from nano_finality import errors, http_app, samples, stats
 from nano_finality.clock import FakeClock
 from nano_finality.node import FakeNode, NodeError, RpcNode
 from nano_finality.sampler import Sampler
@@ -762,6 +763,97 @@ class TestPublishedNodeNameCarriesNoCredential(unittest.TestCase):
         self.assertEqual(RpcNode("node.example", "w").name, "node.example")
         self.assertEqual(RpcNode("http://[::1]:7076", "w").name, "::1")
         self.assertEqual(RpcNode("[::1]:7076", "w").name, "[::1]:7076")
+
+class TestBothStoresShareOneRetentionWindow(unittest.TestCase):
+    """`/v1/finality/compare` is only a comparison if both columns cover the
+    same span of history.
+
+    The endpoint serves the same window computed over each store, under a note
+    that says "The same measurement, run against two independently operated
+    nodes", and `/v1/finality/method` publishes ONE `retention_days`, read off
+    the primary store. So a compare store on a different retention window makes
+    both of those untrue at once - and the second node is the one whose figures
+    nobody can check against ours.
+
+    `build_from_env` constructs `RpcNode`, which opens no socket until it is
+    called, exactly as the credential tests above do.
+    """
+
+    ENV = {
+        "NANO_NODE_URL": "http://node-a.example:7076",
+        "NANO_WALLET_ID": "WALLET",
+        "FINALITY_SOURCE_ACCOUNT": "nano_1src",
+        "FINALITY_DEST_ACCOUNT": "nano_1dst",
+        "FINALITY_COMPARE_NODE_URL": "http://node-b.example:7076",
+    }
+
+    def build(self, **extra):
+        env = dict(self.ENV)
+        env.update(extra)
+        drop = [k for k in os.environ if k.startswith("FINALITY_")]
+        with unittest.mock.patch.dict(os.environ, env, clear=False):
+            for k in drop:
+                if k not in env:
+                    del os.environ[k]
+            return http_app.build_from_env()
+
+    def test_a_shortened_retention_applies_to_the_compare_store_too(self):
+        seven_days = 7 * 86_400
+        service, samplers = self.build(FINALITY_RETENTION_S=str(seven_days))
+        self.assertEqual(service.store.retention_s, seven_days)
+        # Was the 30-day default: the second column kept four times as much
+        # history as the first, and `/v1/finality/method` said 7 days for both.
+        self.assertEqual(service.compare_store.retention_s, seven_days)
+
+    def test_a_longer_retention_applies_to_both_as_well(self):
+        ninety_days = 90 * 86_400
+        service, _ = self.build(FINALITY_RETENTION_S=str(ninety_days))
+        self.assertEqual(service.store.retention_s, ninety_days)
+        self.assertEqual(service.compare_store.retention_s, ninety_days)
+
+    def test_the_published_retention_describes_both_columns(self):
+        seven_days = 7 * 86_400
+        service, _ = self.build(FINALITY_RETENTION_S=str(seven_days))
+        published = service.method_json()["retention_days"]
+        self.assertEqual(published, 7)
+        self.assertEqual(round(service.store.retention_s / 86_400), published)
+        # The figure is read off the primary store and served on an endpoint
+        # that describes the compare column too, so it is only honest while the
+        # two agree.
+        self.assertEqual(round(service.compare_store.retention_s / 86_400),
+                         published)
+
+    def test_the_default_is_the_spec_floor_on_both(self):
+        service, _ = self.build()
+        self.assertEqual(service.store.retention_s, samples.RETENTION_S)
+        self.assertEqual(service.compare_store.retention_s, samples.RETENTION_S)
+
+    def test_everything_else_about_the_second_sampler_already_matched(self):
+        """The knobs that were right stay right; this is the regression guard."""
+        service, samplers = self.build(
+            FINALITY_SAMPLE_TIMEOUT_MS="12000",
+            FINALITY_POLL_INTERVAL_MS="25",
+            FINALITY_SAMPLE_AMOUNT_RAW="3",
+            FINALITY_SAMPLE_INTERVAL_S="90",
+        )
+        self.assertEqual(len(samplers), 2)
+        a, b = service.sampler, service.compare_sampler
+        for field in ("timeout_ms", "poll_ms", "amount_raw", "interval_s",
+                      "source", "destination"):
+            self.assertEqual(getattr(a, field), getattr(b, field), field)
+        # Two different nodes is the whole point, and the names are published.
+        self.assertEqual(a.node.name, "node-a.example")
+        self.assertEqual(b.node.name, "node-b.example")
+
+    def test_no_compare_node_means_no_second_store_at_all(self):
+        env = dict(self.ENV)
+        del env["FINALITY_COMPARE_NODE_URL"]
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            service, samplers = http_app.build_from_env()
+        self.assertIsNone(service.compare_store)
+        self.assertIsNone(service.compare_sampler)
+        self.assertEqual(len(samplers), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

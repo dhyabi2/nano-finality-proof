@@ -116,6 +116,11 @@ Three of the six are new assertions that fail on `main`. The other three pin wha
 already right and pass either way: the 30-day default on both stores, the other six
 sampler knobs already matching, and no compare node meaning no second store at all.
 
+`README.md:50` advertises the suite's size and the `advertised-counts` CI job measures it
+rather than trusting it — which is the rule this repository is built on, applied to its own
+README. The first push left it saying 64 and the job failed exactly as it should:
+`unittest suite: README says 64, measured 70`. It now says 70.
+
 ## Could not verify
 
 - **No live node was measured.** Every check is offline, against `FakeNode` on a
